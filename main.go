@@ -4,20 +4,18 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	ws "github.com/gorilla/websocket"
-	pb "github.com/loamhoof/indicator"
-	"github.com/loamhoof/indicator/client"
 )
 
 var (
-	icon, sFrom, sTo, logFile string
-	port                      int
-	from, to                  []string
-	logger                    *log.Logger
+	port     int
+	from, to []string
+	logger   *log.Logger
 
 	symbols = map[string]string{
 		"EUR": "€",
@@ -29,19 +27,17 @@ var (
 
 func init() {
 	flag.IntVar(&port, "port", 15000, "Port of the shepherd")
-	flag.StringVar(&icon, "icon", "", "Path to the icon")
-	flag.StringVar(&sFrom, "from", "", "Base currency")
-	flag.StringVar(&sTo, "to", "", "Target currency")
-	flag.StringVar(&logFile, "log", "", "Log file")
+	sFrom := flag.String("from", "", "Base currency")
+	sTo := flag.String("to", "", "Target currency")
 
 	flag.Parse()
 
-	if sFrom == "" || sTo == "" {
+	if *sFrom == "" || *sTo == "" {
 		log.Fatalln("Missing from/to currency.")
 	}
 
-	from = strings.Split(sFrom, ",")
-	to = strings.Split(sTo, ",")
+	from = strings.Split(*sFrom, ",")
+	to = strings.Split(*sTo, ",")
 
 	if len(from) != len(to) {
 		log.Fatalln("from/to don't match.")
@@ -51,22 +47,6 @@ func init() {
 }
 
 func main() {
-	if logFile != "" {
-		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, os.ModePerm)
-		if err != nil {
-			logger.Fatalln(err)
-		}
-		defer f.Close()
-		logger = log.New(f, "", log.LstdFlags)
-	}
-
-	sc := client.NewShepherdClient(port)
-	err := sc.Init()
-	if err != nil {
-		logger.Fatalln(err)
-	}
-	defer sc.Close()
-
 	var (
 		wsDialer ws.Dialer
 		wsConn   *ws.Conn
@@ -84,15 +64,10 @@ func main() {
 	}
 
 	for i := 0; i < len(from); i++ {
-		iReq := &pb.Request{
-			Id:         fmt.Sprintf("indicator-gdax-%s-%s", from[i], to[i]),
-			Icon:       icon,
-			Label:      fmt.Sprintf("%s/%s: N/A", symbol(from[i]), symbol(to[i])),
-			LabelGuide: "AAA/BBB: 123456789",
-			Active:     true,
-		}
+		id := fmt.Sprintf("indicator-gdax-%s-%s", from[i], to[i])
+		label := fmt.Sprintf("%s/%s: N/A", symbol(from[i]), symbol(to[i]))
 
-		if _, err := sc.Update(iReq); err != nil {
+		if err := update(id, label); err != nil {
 			logger.Println(err)
 		}
 	}
@@ -126,17 +101,22 @@ func main() {
 
 		product := strings.Split(msg.ProductId, "-")
 
-		iReq := &pb.Request{
-			Id:         fmt.Sprintf("indicator-gdax-%s-%s", product[0], product[1]),
-			Icon:       icon,
-			Label:      fmt.Sprintf("%s/%s: %.0f", symbol(product[0]), symbol(product[1]), msg.Price),
-			LabelGuide: "AAA/BBB: 123456789",
-			Active:     true,
-		}
-		if _, err := sc.Update(iReq); err != nil {
+		id := fmt.Sprintf("indicator-gdax-%s-%s", product[0], product[1])
+		label := fmt.Sprintf("%s/%s: %.0f", symbol(product[0]), symbol(product[1]), msg.Price)
+		if err := update(id, label); err != nil {
 			logger.Println(err)
 		}
 	}
+}
+
+func update(id, label string) error {
+	resp, err := http.Post(fmt.Sprintf("http://localhost:%v/%s", port, id), "text/plain", strings.NewReader(label))
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+
+	return nil
 }
 
 func symbol(currency string) string {
